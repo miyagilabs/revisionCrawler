@@ -1,11 +1,31 @@
 SERVICE_URL = "https://gerrit.wikimedia.org/r"
 API_URL = "{}/changes/".format(SERVICE_URL)
+SHOW_REQUESTED_URLS_FOR_DEBUGGING = True
+HTTPS_REQUEST_COUNT = 0
+
+import logging
+logger = logging.getLogger('revisionCrawler')
+hdlr = logging.FileHandler('/var/tmp/revisionCrawler.log')
+formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+hdlr.setFormatter(formatter)
+logger.addHandler(hdlr) 
+logger.setLevel(logging.DEBUG)
+print "Logging started. Run the following to see the log:"
+print "tail -f /var/tmp/revisionCrawler.log | grep INFO\n\n"
+print "tail -f /var/tmp/revisionCrawler.log | grep WARNING\n\n"
+print "tail -f /var/tmp/revisionCrawler.log | grep DEBUG\n\n"
 
 
 def request(relative_url, api_url=API_URL):
 	import urllib2
 	url = "{}{}".format(api_url, relative_url)
-	# print url
+	if SHOW_REQUESTED_URLS_FOR_DEBUGGING:
+		logger.debug("Visiting %s" % url)
+	global HTTPS_REQUEST_COUNT
+	HTTPS_REQUEST_COUNT += 1
+	if HTTPS_REQUEST_COUNT % 5 == 0:
+		logger.warning("Total HTTPS request made: %d" % HTTPS_REQUEST_COUNT)
+
 	return urllib2.urlopen(url).read()
 
 
@@ -36,21 +56,23 @@ def revision_count(change_id):
 
 
 # TODO: https://github.com/miyagilabs/revisionCrawler/issues/1
-def download_base_file(change_id, file_name):
+# The parameter file_path should be slash escaped
+def download_base_file(change_id, file_path):
 	valid_revision_number = revision_numbers(change_id)[0]
 	# Note: "parent=1" specifies that we request the file in the parent commit.
 	relative_url = "{}/revisions/{}/files/{}/download?parent=1".format(
 		change_id,
 		valid_revision_number,
-		file_name)
+		file_path)
 	# https://gerrit.wikimedia.org/r/changes/356858/revisions/1/files/SpamBlacklistHooks.php/download?parent=1
 	return request(relative_url)
 
 
 # TODO: https://github.com/miyagilabs/revisionCrawler/issues/1
-def download_revision_file(change_id, revision_no, file_name):
+# The parameter file_path should be slash escaped
+def download_revision_file(change_id, revision_no, file_path):
 	pattern = "{}/revisions/{}/files/{}/download"
-	relative_url = pattern.format(change_id, revision_no, file_name)	
+	relative_url = pattern.format(change_id, revision_no, file_path)	
 	return request(relative_url)
 
 
@@ -69,6 +91,7 @@ def files_in_revision(change_id, revision_no):
 	return filter(condition, response.keys())
 	
 
+# The parameter file_path should be slash escaped
 def has_diff(change_id, file_path, revision_no, base_revision_no):
 	pattern = "{}/revisions/{}/files/{}/diff?base={}"
 	relative_url = pattern.format(
@@ -83,7 +106,11 @@ def has_diff(change_id, file_path, revision_no, base_revision_no):
 def slash_escaped_file_path(path):
 	return path.replace("/", "%2F")
 
+def unescape_slash(path):
+	return path.replace("%2F", "/")	
 
+
+# The parameter file_path should NOT be slash escaped
 def print_file_comments_in_revision(change_id, revision_no, file_path):
 	relative_url = "{}/revisions/{}/comments".format(change_id, revision_no)
 	response = request_json(relative_url)
@@ -91,6 +118,72 @@ def print_file_comments_in_revision(change_id, revision_no, file_path):
 	for comment_map in response[file_path]:
 		print comment_map["author"]["name"] + "says: \"\n " + comment_map["message"]
 		print "\""
+
+
+# The parameter file_path should NOT be slash escaped
+def has_comments_for_file_in_revision(change_id, revision_no, file_path):
+	relative_url = "{}/revisions/{}/comments".format(change_id, revision_no)
+	response = request_json(relative_url)
+	return len(response) > 0 and file_path in response
+
+
+# The parameter file_path should NOT be slash escaped
+def has_comments_for_file(change_id, file_path, cached_revision_nos=None):
+	numbers = cached_revision_nos if cached_revision_nos else revision_numbers(change_id)
+
+	for n in numbers:
+		if has_comments_for_file_in_revision(change_id, n, file_path):
+			return True
+
+	return False
+
+
+# The parameter file_path should NOT be slash escaped
+def build_diff_path(change_id, revision_no, file_path):
+	#""	https://gerrit.wikimedia.org/r/#/c/356586/6/modules/gerrit/templates/gerrit.config.erb
+	pattern = "{}/#/c/{}/{}/{}"
+	return pattern.format(SERVICE_URL, change_id, revision_no, file_path)
+
+
+def find_interesting_file_paths(change_id):
+	logger.info("Examining %s" % change_id)
+
+	if not is_merged(change_id):
+		logger.info("Skipping %s (not merged)" % change_id)
+		return
+
+	numbers = revision_numbers(change_id)
+	if len(numbers) < 2:
+		logger.info("Skipping %s (not revised)" % change_id)
+		return
+
+	# check if there any comments
+
+	first_revision_no = numbers[0]
+	last_revision_no = numbers[-1]
+	file_paths = files_in_revision(change_id, first_revision_no)
+	file_paths = [slash_escaped_file_path(f) for f in file_paths]
+
+	condition = lambda file_path: has_diff(
+		change_id, file_path, last_revision_no, first_revision_no)
+	interesting_file_paths = filter(condition, file_paths)
+
+	if not interesting_file_paths:
+		logger.info("Skipping %s (no interesting file paths - no diff)" % change_id)
+		return
+
+	condition = lambda file_path: has_comments_for_file(
+		change_id, unescape_slash(file_path), cached_revision_nos=numbers)
+	interesting_file_paths = filter(condition, interesting_file_paths)
+
+	if not interesting_file_paths:
+		logger.info("Skipping %s (no interesting file paths - no comments)" % change_id)
+		return
+
+	for f in interesting_file_paths:
+		print build_diff_path(change_id, last_revision_no, f)
+
+	logger.info("Successfully done with %s" % change_id)
 
 
 # DEMO
@@ -116,7 +209,7 @@ def print_file_comments_in_revision(change_id, revision_no, file_path):
 
 
 # print has_diff(356858, "SpamBlacklistHooks.php", 2, 1)  # True
-# print has_diff(356858, "EmailBlacklist.php.php", 2, 1)  # False
+# print has_diff(356858, "EmailBlacklist.php", 2, 1)  # False
 
 # print has_diff(
 #  	356586,
@@ -136,3 +229,71 @@ def print_file_comments_in_revision(change_id, revision_no, file_path):
 # 	356586,
 # 	3,
 # 	"modules/gerrit/templates/gerrit.config.erb")
+
+
+# print build_diff_path(356586, 6, "modules/gerrit/templates/gerrit.config.erb")
+
+# print has_comments_for_file_in_revision(
+# 	356586, 3, "modules/gerrit/templates/gerrit.config.erb") # True
+# print has_comments_for_file_in_revision(
+# 	356586, 2, "modules/gerrit/templates/gerrit.config.erb") # False
+# print has_comments_for_file_in_revision(
+# 	356858, 1, "SpamBlacklistHooks.php") # True
+# print has_comments_for_file_in_revision(
+# 	356858, 2, "SpamBlacklistHooks.php") # False
+
+# print has_comments_for_file(
+# 	356586, "modules/gerrit/templates/gerrit.config.erb") # True
+# print has_comments_for_file(356858, "SpamBlacklistHooks.php") # True
+# print has_comments_for_file(356858, "EmailBlacklist.php") # False
+
+# find_interesting_file_paths(356586)
+# find_interesting_file_paths(356858)
+
+
+# for change_id in range(356585, 356587):
+# 	find_interesting_file_paths(change_id)
+
+
+## Examining if a file has any diffs
+# change_id = 356508
+# numbers = revision_numbers(change_id)
+# first_revision_no = numbers[0]
+# last_revision_no = numbers[-1]
+# file_paths = files_in_revision(change_id, first_revision_no)
+# file_paths = [slash_escaped_file_path(f) for f in file_paths]
+# condition = lambda file_path: has_diff(
+# 	change_id, file_path, last_revision_no, first_revision_no)
+# interesting_file_paths = filter(condition, file_paths)
+# print interesting_file_paths
+
+
+
+# TODO: Instead of printing the urls, dump them to a file (otherwise data can be lost)
+# TODO: Record for change id, success or failure so that we can try again later. Also
+# 		record the reason for the fail so that we know which change ids do not exist and
+#		for which we had transient network problems
+from time import sleep
+import time
+import urllib2
+
+start_time = time.time()
+change_id_count = 0
+for change_id in range(300008, 310000):
+	try:
+		find_interesting_file_paths(change_id)
+	except urllib2.HTTPError as e:
+		# TODO: record the result for the change id for retrying later
+		logger.error("The server failed the request for %s. Error code: %s" % (change_id, e.code))
+	except urllib2.URLError as e:
+		# TODO: record the result for the change id for retrying later
+		logger.error("We failed to reach a server for %s. Reason: %s" % (change_id, e.reason))
+	else:
+		change_id_count += 1
+		logger.warning(
+			"HTTPS request average %f" % (HTTPS_REQUEST_COUNT * 1.0 / change_id_count))
+		elapsed_time = time.time() - start_time
+		rate = HTTPS_REQUEST_COUNT * 1.0 / elapsed_time
+		logger.warning("Rate of HTTPS requests: %f per second" % rate)
+		sleep(1) # Time in seconds.
+

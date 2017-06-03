@@ -1,4 +1,5 @@
-API_URL = "https://gerrit.wikimedia.org/r/changes/"
+SERVICE_URL = "https://gerrit.wikimedia.org/r"
+API_URL = "{}/changes/".format(SERVICE_URL)
 
 
 def request(relative_url, api_url=API_URL):
@@ -15,7 +16,6 @@ def request_json(relative_url, api_url=API_URL):
 
 	import json
 	return json.loads(response)
-
 
 
 def is_merged(change_id):
@@ -35,12 +35,19 @@ def revision_count(change_id):
 	return len(revision_numbers(change_id))
 
 
+# TODO: https://github.com/miyagilabs/revisionCrawler/issues/1
 def download_base_file(change_id, file_name):
-	relative_url = "{}/revisions/1/files/{}/download?parent=1".format(change_id, file_name)	
+	valid_revision_number = revision_numbers(change_id)[0]
+	# Note: "parent=1" specifies that we request the file in the parent commit.
+	relative_url = "{}/revisions/{}/files/{}/download?parent=1".format(
+		change_id,
+		valid_revision_number,
+		file_name)
 	# https://gerrit.wikimedia.org/r/changes/356858/revisions/1/files/SpamBlacklistHooks.php/download?parent=1
 	return request(relative_url)
 
 
+# TODO: https://github.com/miyagilabs/revisionCrawler/issues/1
 def download_revision_file(change_id, revision_no, file_name):
 	pattern = "{}/revisions/{}/files/{}/download"
 	relative_url = pattern.format(change_id, revision_no, file_name)	
@@ -62,9 +69,7 @@ def files_in_revision(change_id, revision_no):
 	return filter(condition, response.keys())
 	
 
-# Is there a diff in a file between two revisions:
 def has_diff(change_id, file_path, revision_no, base_revision_no):
-	# TODO: convert each slash in file_path to %2F
 	pattern = "{}/revisions/{}/files/{}/diff?base={}"
 	relative_url = pattern.format(
 		change_id,
@@ -79,7 +84,6 @@ def slash_escaped_file_path(path):
 	return path.replace("/", "%2F")
 
 
-
 def print_file_comments_in_revision(change_id, revision_no, file_path):
 	relative_url = "{}/revisions/{}/comments".format(change_id, revision_no)
 	response = request_json(relative_url)
@@ -89,6 +93,7 @@ def print_file_comments_in_revision(change_id, revision_no, file_path):
 		print "\""
 
 
+# DEMO
 
 # print is_merged(356586) # True
 # print is_merged(356858) # False

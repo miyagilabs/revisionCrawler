@@ -55,7 +55,7 @@ def revision_count(change_id):
 	return len(revision_numbers(change_id))
 
 
-# TODO: https://github.com/miyagilabs/revisionCrawler/issues/1
+# TODO: Use /content instead of /download (https://github.com/miyagilabs/revisionCrawler/issues/1)
 # The parameter file_path should be slash escaped
 def download_base_file(change_id, file_path):
 	valid_revision_number = revision_numbers(change_id)[0]
@@ -68,7 +68,7 @@ def download_base_file(change_id, file_path):
 	return request(relative_url)
 
 
-# TODO: https://github.com/miyagilabs/revisionCrawler/issues/1
+# TODO: Use /content instead of /download (https://github.com/miyagilabs/revisionCrawler/issues/1)
 # The parameter file_path should be slash escaped
 def download_revision_file(change_id, revision_no, file_path):
 	pattern = "{}/revisions/{}/files/{}/download"
@@ -150,12 +150,12 @@ def find_interesting_file_paths(change_id):
 
 	if not is_merged(change_id):
 		logger.info("Skipping %s (not merged)" % change_id)
-		return
+		return []
 
 	numbers = revision_numbers(change_id)
 	if len(numbers) < 2:
 		logger.info("Skipping %s (not revised)" % change_id)
-		return
+		return []
 
 	# check if there any comments
 
@@ -170,7 +170,7 @@ def find_interesting_file_paths(change_id):
 
 	if not interesting_file_paths:
 		logger.info("Skipping %s (no interesting file paths - no diff)" % change_id)
-		return
+		return []
 
 	condition = lambda file_path: has_comments_for_file(
 		change_id, unescape_slash(file_path), cached_revision_nos=numbers)
@@ -178,12 +178,28 @@ def find_interesting_file_paths(change_id):
 
 	if not interesting_file_paths:
 		logger.info("Skipping %s (no interesting file paths - no comments)" % change_id)
-		return
+		return []
 
+	paths = []
 	for f in interesting_file_paths:
-		print build_diff_path(change_id, last_revision_no, f)
+		path = build_diff_path(change_id, last_revision_no, f)
+		print path
+		paths.append(path)
 
 	logger.info("Successfully done with %s" % change_id)
+	return paths
+
+
+
+def insert_status(db_cursor, change_id, status, detail):
+	#import sqlite3
+	db_cursor.execute("INSERT INTO changeIdStatus(change_id, status, detail) VALUES ({}, \"{}\", \"{}\")".\
+		format(change_id, status, detail))
+
+def insert_corrected_file_url(db_cursor, change_id, url):
+	#import sqlite3
+	db_cursor.execute("INSERT INTO 	correctedFileUrl(change_id, url) VALUES ({change_id}, \"{url}\")".\
+		format(change_id=change_id, url=url))
 
 
 # DEMO
@@ -269,31 +285,65 @@ def find_interesting_file_paths(change_id):
 
 
 
-# TODO: Instead of printing the urls, dump them to a file (otherwise data can be lost)
-# TODO: Record for change id, success or failure so that we can try again later. Also
-# 		record the reason for the fail so that we know which change ids do not exist and
-#		for which we had transient network problems
+import argparse
+
+parser = argparse.ArgumentParser(description='Process some integers.')
+parser.add_argument('--start', metavar='start', dest='start', type=int, required=True,
+                    help='an integer for the starting change id')
+parser.add_argument('--end', metavar='end', dest='end', type=int, required=True,
+                    help='an integer for the final change id')
+args = parser.parse_args()
+
+
+
 from time import sleep
 import time
 import urllib2
 
+
+
+sqlite_file='db/db.sqlite3'
+import sqlite3
+db_connection = sqlite3.connect(sqlite_file)
+db_cursor = db_connection.cursor()
+
 start_time = time.time()
 change_id_count = 0
-for change_id in range(300008, 310000):
+for change_id in range(args.start, args.end + 1):
+	paths = []
+	change_id_count += 1
 	try:
-		find_interesting_file_paths(change_id)
+		paths = find_interesting_file_paths(change_id)
 	except urllib2.HTTPError as e:
-		# TODO: record the result for the change id for retrying later
 		logger.error("The server failed the request for %s. Error code: %s" % (change_id, e.code))
+		insert_status(db_cursor, change_id, "ERROR", e.code)
 	except urllib2.URLError as e:
-		# TODO: record the result for the change id for retrying later
 		logger.error("We failed to reach a server for %s. Reason: %s" % (change_id, e.reason))
-	else:
-		change_id_count += 1
-		logger.warning(
-			"HTTPS request average %f" % (HTTPS_REQUEST_COUNT * 1.0 / change_id_count))
-		elapsed_time = time.time() - start_time
-		rate = HTTPS_REQUEST_COUNT * 1.0 / elapsed_time
-		logger.warning("Rate of HTTPS requests: %f per second" % rate)
-		sleep(1) # Time in seconds.
+		insert_status(db_cursor, change_id, "ERROR", e.reason)
+	else: 
+		insert_status(db_cursor, change_id, "DONE", len(paths))
+		for path in paths:
+			insert_corrected_file_url(db_cursor, change_id, path)
+
+	logger.warning(
+		"HTTPS request average %f" % (HTTPS_REQUEST_COUNT * 1.0 / change_id_count))
+	elapsed_time = time.time() - start_time
+	rate = HTTPS_REQUEST_COUNT * 1.0 / elapsed_time
+	logger.warning("Rate of HTTPS requests: %f per second" % rate)
+	logger.warning("Elapsed time is: %f seconds" % elapsed_time)
+	sleep(0.4) # Time in seconds.
+	db_connection.commit()
+
+# Stats
+elapsed_time = time.time() - start_time
+logger.warning("Completed")
+logger.warning("HTTPS requests made: %d" % HTTPS_REQUEST_COUNT)
+logger.warning("Total count of change ids processed: %d" % change_id_count)
+logger.warning("Total elapsed time %f" % elapsed_time)
+rate = elapsed_time * 1.0 / change_id_count
+logger.warning("Time per change id: %f seconds per change id" % rate)
+rate = HTTPS_REQUEST_COUNT * 1.0 / elapsed_time
+logger.warning("Rate of HTTPS requests: %f per second" % rate)
+
+db_connection.close()
 

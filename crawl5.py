@@ -292,6 +292,8 @@ parser.add_argument('--start', metavar='start', dest='start', type=int, required
                     help='an integer for the starting change id')
 parser.add_argument('--end', metavar='end', dest='end', type=int, required=True,
                     help='an integer for the final change id')
+parser.add_argument('--db', metavar='db', dest='sqlite_file', type=str, required=True,
+                    help='db file name')
 args = parser.parse_args()
 
 
@@ -301,10 +303,8 @@ import time
 import urllib2
 
 
-
-sqlite_file='db/db.sqlite3'
 import sqlite3
-db_connection = sqlite3.connect(sqlite_file)
+db_connection = sqlite3.connect(args.sqlite_file)
 db_cursor = db_connection.cursor()
 
 start_time = time.time()

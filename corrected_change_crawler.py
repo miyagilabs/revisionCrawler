@@ -68,7 +68,7 @@ class CorrectedChangeCrawler:
 			except urllib2.URLError as e:
 				self.logger.error("We failed to reach a server for %s. Reason: %s" % (change_id, e.reason))
 				self.crawler.insert_status(change_id, "ERROR", e.reason)
-			else: 
+			else:
 				self.crawler.insert_status(change_id, "DONE", len(paths))
 				for path in paths:
 					self.crawler.insert_corrected_file_url(change_id, path)
@@ -80,6 +80,8 @@ class CorrectedChangeCrawler:
 			rate = self.crawler.https_request_count * 1.0 / elapsed_time
 			self.logger.warning("Rate of HTTPS requests: %f per second" % rate)
 			self.logger.warning("Elapsed time is: %f seconds" % elapsed_time)
+			per_change_rate = elapsed_time * 1.0 / change_id_count
+			self.logger.warning("Time per change id: %f seconds per change id" % per_change_rate)
 
 			sleep(0.4) # Time in seconds.
 			self.db_connection.commit()

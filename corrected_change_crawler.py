@@ -43,7 +43,7 @@ class CorrectedChangeCrawler:
 		paths = []
 		for f in interesting_file_paths:
 			path = self.crawler.build_diff_path(change_id, last_revision_no, f)
-			print path
+			# print path
 			paths.append(path)
 
 		self.logger.info("Successfully done with %s" % change_id)
@@ -67,6 +67,9 @@ class CorrectedChangeCrawler:
 				self.crawler.insert_status(change_id, "ERROR", e.code)
 			except urllib2.URLError as e:
 				self.logger.error("We failed to reach a server for %s. Reason: %s" % (change_id, e.reason))
+				self.crawler.insert_status(change_id, "ERROR", e.reason)
+			except UnicodeEncodeError as e:
+				self.logger.error("We failed to process a filepath with the unicode format for %s. Reason: %s" % (change_id, e.reason))
 				self.crawler.insert_status(change_id, "ERROR", e.reason)
 			else:
 				self.crawler.insert_status(change_id, "DONE", len(paths))

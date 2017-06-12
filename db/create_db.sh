@@ -1,2 +1,1 @@
-rm -f db.sqlite3
-sqlite3 db.sqlite3 < create.sql
+sqlite3 $1.sqlite3 < create.sql

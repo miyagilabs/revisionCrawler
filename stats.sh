@@ -1,2 +1,2 @@
-tail -f /var/tmp/revisionCrawler.log | grep WARNING
+tail -f /var/tmp/revisionCrawler.log | grep $1
 
